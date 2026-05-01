@@ -1,6 +1,10 @@
 # sACN-Node
 I vibecoded everything. Ideas and base code is mine tho
 
+---
+MOST STUFF WAS WRITTEN BY CLAUDE.AI I DO NOT KNOW IF ANY OF THIS IS COPIED FROM ANYTHING. IF YOU OR SOMEONE YOU KNOW OWNS ANY OF THIS PLEASE WRITE ME AN EMAIL.
+---
+
 # ESP32 DMX Encoder - sACN/ArtNet to 4x DMX512
 
 Professioneller DMX-Konverter für Lichtsteuerung mit GrandMA2, ETC Eos, Chamsys MagicQ oder anderen Lichtpulten.
