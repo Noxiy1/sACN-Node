@@ -1,13 +1,12 @@
 # DMX Encoder - Praktische Installationsanleitung
 
-## Phase 1: Vorbereitung (30 Min)
+## Phase 1: Vorbereitung
 
 ### 1.1 Material-Checkliste
 
 - [ ] ESP32-ETH01 Modul
 - [ ] 4x MAX485 Module (TTL-RS485)
 - [ ] 4x XLR-3 Buchse (weiblich, DMX)
-- [ ] 4x 120Ω Abschlusswiderstände (für DMX)
 - [ ] RJ45 Ethernet-Kabel
 - [ ] USB-C Kabel (für Upload)
 - [ ] 5V Stromversorgung (mind. 1A)
@@ -30,7 +29,7 @@
 
 ---
 
-## Phase 2: Hardware-Vorbereitung (1 Stunde)
+## Phase 2: Hardware-Vorbereitung
 
 ### 2.1 Dupont-Kabel vorbereiten
 
@@ -71,23 +70,10 @@ Achte auf:
 ✓ Kaltlötstellen vermeiden
 ```
 
-### 2.3 Breadboard/Perf-Board Layout
-
-```
-Layout Beispiel:
-
-+5V ═════════════════════════════════
- ║                                   ║
-[ESP32]    [MAX485#1]    [MAX485#2]
- ║         │ │ │ │ │       │ │ │
- ║         1 2 3 4 5 8     1 2 3 4 5 8
- ║         │ │ │ │ │       │ │ │
-GND ═══════╧═╧═╧═╧═╧═══════╧═╧═╧
-```
 
 ---
 
-## Phase 3: Elektronik Zusammenbau (2-3 Stunden)
+## Phase 3: Elektronik Zusammenbau
 
 ### 3.1 MAX485 Module auf Breadboard/Perf-Board
 
@@ -169,7 +155,7 @@ Die Schirme sollten leitend sein:
 
 ---
 
-## Phase 4: Gehäuse & Integration (1-2 Stunden)
+## Phase 4: Gehäuse & Integration
 
 ### 4.1 3D-Druck des Gehäuses
 
@@ -250,7 +236,7 @@ Externe 5V Stromversorgung:
 
 ---
 
-## Phase 5: Software Installation (30 Min)
+## Phase 5: Software Installation
 
 ### 5.1 VS Code + PlatformIO
 
@@ -307,7 +293,7 @@ Warte auf Ethernet-Verbindung...
 
 ---
 
-## Phase 6: Testing & Inbetriebnahme (1-2 Stunden)
+## Phase 6: Testing & Inbetriebnahme
 
 ### 6.1 Grundtest ohne Lichtpult
 
