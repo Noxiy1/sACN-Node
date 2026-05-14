@@ -142,8 +142,6 @@ sendDMX(1, dmxBuffer[1]);  // UART2
 sendDMX(2, dmxBuffer[2]);  // UART0
 
 // DMX4 senden
-sendDMX(3, dmxBuffer[3]);  // SoftSerial
-```
 
 Alle 4 werden **parallel** verarbeitet!
 
