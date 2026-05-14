@@ -1,8 +1,8 @@
 # sACN-Node
-I vibecoded everything. Ideas and base code is mine tho
+I vibecoded like 80%. Ideas 3d Models and testing is done by me tho
 
 ---
-MOST STUFF WAS WRITTEN BY CLAUDE.AI I DO NOT KNOW IF ANY OF THIS IS COPIED FROM ANYTHING. IF YOU OR SOMEONE YOU KNOW OWNS ANY OF THIS PLEASE WRITE ME AN EMAIL.
+MOST STUFF WAS WRITTEN BY CLAUDE.AI
 ---
 
 # 🚀 ESP32 DMX Encoder - OPTIMIERT (4x DMX, kein USB)
