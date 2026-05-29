@@ -2,24 +2,35 @@
  * sACN → DMX512 Konverter
  * Hardware: WT32-ETH01 + 3× MAX485 + SSD1306 OLED 128×32
  *
- * PIN-Belegung:
- *   OLED SDA      → GPIO 4
- *   OLED SCL      → GPIO 2
- *   MAX485 #1 TX  → GPIO 14   (UART2)
- *   MAX485 #1 DE/RE→ GPIO 15
- *   MAX485 #2 TX  → GPIO 12   (UART via SoftwareSerial / HardwareSerial)
- *   MAX485 #2 DE/RE→ GPIO 13
- *   MAX485 #3 TX  → GPIO 5    (UART1)
- *   MAX485 #3 DE/RE→ GPIO 17
+ * ┌─────────────────────────────────────────────────────┐
+ * │  PIN-BELEGUNG                                       │
+ * ├──────────────┬────────┬───────────────────────────  │
+ * │  Funktion    │  GPIO  │  Anmerkung                  │
+ * ├──────────────┼────────┼───────────────────────────  │
+ * │  OLED SDA    │   4    │  I²C                        │
+ * │  OLED SCL    │   2    │  I²C                        │
+ * ├──────────────┼────────┼───────────────────────────  │
+ * │  DMX1 TX     │  14    │  UART2 TX                   │
+ * │  DMX1 DE/RE  │  15    │  gebrückt auf einem Pin     │
+ * ├──────────────┼────────┼───────────────────────────  │
+ * │  DMX2 TX     │  12    │  UART1 TX                   │
+ * │  DMX2 DE/RE  │  13    │  gebrückt auf einem Pin     │
+ * ├──────────────┼────────┼───────────────────────────  │
+ * │  DMX3 TX     │  33    │  UART0 TX (remapped!)       │
+ * │  DMX3 DE/RE  │  17    │  gebrückt auf einem Pin     │
+ * ├──────────────┼────────┼───────────────────────────  │
+ * │  Debug RX/TX │  1/3   │  UART0 default (USB-Serial) │
+ * └──────────────┴────────┴───────────────────────────  ┘
+ *
+ * UART0 wird auf GPIO33 remappt → Debug-Serial (GPIO1/3) bleibt frei.
+ * RX aller DMX-UARTs → GPIO36 (Input-Only, nie genutzt).
  *
  * Bibliotheken (Arduino Library Manager):
- *   - ETH (enthalten in ESP32 Arduino Core)
- *   - Adafruit_SSD1306
- *   - Adafruit_GFX
+ *   - Adafruit SSD1306
+ *   - Adafruit GFX Library
+ *   ESP32 Arduino Core bringt ETH.h mit.
  *
- * sACN: E1.31 UDP Multicast, Port 5568
- *
- * Kompilieren: Board = "WT32-ETH01" (oder "ESP32 Dev Module")
+ * Board: "WT32-ETH01" oder "ESP32 Dev Module", 240 MHz
  */
 
 #include <Arduino.h>
@@ -29,234 +40,219 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
-// ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────
+//  PIN-DEFINITIONEN
+// ─────────────────────────────────────────────────────
+
+#define OLED_SDA      4
+#define OLED_SCL      2
+
+// Gemeinsamer Dummy-RX (Input-Only, nie genutzt)
+#define DMX_RX_DUMMY  36
+
+// Port 1 – UART2
+#define DMX1_TX       14
+#define DMX1_DE_RE    15
+
+// Port 2 – UART1
+#define DMX2_TX       12
+#define DMX2_DE_RE    13
+
+// Port 3 – UART0 remappt auf GPIO33 (Debug-Serial bleibt auf GPIO1/3)
+#define DMX3_TX       33
+#define DMX3_DE_RE    17
+
+// ─────────────────────────────────────────────────────
 //  KONFIGURATION
-// ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────
 
-// sACN-Universen (1-basiert)
-#define UNIVERSE_1  1
-#define UNIVERSE_2  2
-#define UNIVERSE_3  3
+#define UNIVERSE_1        1
+#define UNIVERSE_2        2
+#define UNIVERSE_3        3
 
-// GPIO-Definitionen
-#define OLED_SDA    4
-#define OLED_SCL    2
-
-#define DMX1_TX     14
-#define DMX1_DE_RE  15
-
-#define DMX2_TX     12
-#define DMX2_DE_RE  13
-
-#define DMX3_TX     5
-#define DMX3_DE_RE  17
-
-// DMX-Timing (µs)
-#define DMX_BREAK_US    176   // >= 88 µs
-#define DMX_MAB_US       16   // >= 8 µs
+#define DMX_BAUD      250000
+#define DMX_BREAK_US    176    // >= 88 µs   (Spec: min 88, typ 176)
+#define DMX_MAB_US       12    // >= 8 µs
 #define DMX_CHANNELS    512
 
-// sACN
-#define SACN_PORT       5568
-#define SACN_TIMEOUT_MS 3000   // Signal als verloren markieren nach 3 s
+#define SACN_PORT        5568
+#define SACN_TIMEOUT_MS  3000
 
-// OLED
 #define SCREEN_WIDTH  128
 #define SCREEN_HEIGHT  32
 #define OLED_RESET     -1
+#define OLED_I2C_ADDR  0x3C
 
-// ──────────────────────────────────────────
-//  GLOBALE VARIABLEN
-// ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────
+//  GLOBALE OBJEKTE
+// ─────────────────────────────────────────────────────
+
+// UART2, UART1, UART0 – alle HardwareSerial, kein SoftwareSerial
+HardwareSerial dmxSerial1(2);   // UART2 → DMX Port 1
+HardwareSerial dmxSerial2(1);   // UART1 → DMX Port 2
+HardwareSerial dmxSerial3(0);   // UART0 → DMX Port 3 (remappt)
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 WiFiUDP udp;
 
-uint8_t dmxData[3][DMX_CHANNELS + 1]; // Index 0 = Startcode (0x00)
+// DMX-Datenpuffer: [Port][0..511], Byte 0 = Startcode 0x00
+uint8_t dmxData[3][DMX_CHANNELS + 1];
 
-bool  sacnActive[3]    = {false, false, false};
-unsigned long lastPacket[3] = {0, 0, 0};
+bool          sacnActive[3]  = {false, false, false};
+unsigned long lastPacket[3]  = {0, 0, 0};
 
-bool  ethConnected = false;
-String localIP     = "0.0.0.0";
+bool   ethConnected = false;
+String localIP      = "0.0.0.0";
 
-// HardwareSerial für 3 DMX-Ports
-// UART0 = Serial (Debug), UART1, UART2 verfügbar
-HardwareSerial dmxSerial1(2); // UART2 → TX GPIO14
-HardwareSerial dmxSerial2(1); // UART1 → TX GPIO12  (RX dummy = 0)
-HardwareSerial dmxSerial3(0); // UART0 → TX GPIO5   (RX dummy = 0, kein Debug-Output!)
+// ─────────────────────────────────────────────────────
+//  DMX BREAK + MAB + FRAME
+//
+//  Ablauf je Frame:
+//    1. DE/RE HIGH (Sender aktiv)
+//    2. TX-Pin manuell LOW  → BREAK
+//    3. TX-Pin manuell HIGH → MAB
+//    4. UART übernimmt den Pin, sendet Startcode + 512 Byte
+//    5. serial.flush() wartet bis FIFO leer
+// ─────────────────────────────────────────────────────
 
-// ──────────────────────────────────────────
-//  sACN E1.31 PAKET-PARSE
-// ──────────────────────────────────────────
+// Hilfsfunktion: UART-Pin manuell auf LOW/HIGH schalten,
+// bevor der UART die Kontrolle zurückbekommt.
+static inline void pinLow(uint8_t pin) {
+  gpio_set_direction((gpio_num_t)pin, GPIO_MODE_OUTPUT);
+  gpio_set_level((gpio_num_t)pin, 0);
+}
+static inline void pinHigh(uint8_t pin) {
+  gpio_set_level((gpio_num_t)pin, 1);
+}
 
-// sACN ACN Packet Identifier
-static const uint8_t ACN_ID[] = {
-  0x41, 0x53, 0x43, 0x2d, 0x45, 0x31, 0x2e, 0x31,
-  0x37, 0x00, 0x00, 0x00
+void sendDmxFrame(HardwareSerial& ser, uint8_t txPin, uint8_t deRePin,
+                  uint8_t* data) {
+  // --- Break ---
+  digitalWrite(deRePin, HIGH);   // Sender einschalten
+  pinLow(txPin);
+  delayMicroseconds(DMX_BREAK_US);
+
+  // --- MAB ---
+  pinHigh(txPin);
+  delayMicroseconds(DMX_MAB_US);
+
+  // --- Daten senden ---
+  // Der UART hat den Pin bereits während begin() als UART_TX konfiguriert;
+  // nach dem manuellen LOW/HIGH übernimmt er sofort wieder.
+  ser.write(data, DMX_CHANNELS + 1);   // Startcode (data[0]=0x00) + 512 Byte
+  ser.flush();                          // blockiert bis FIFO komplett gesendet
+}
+
+// ─────────────────────────────────────────────────────
+//  sACN E1.31 PARSER
+// ─────────────────────────────────────────────────────
+
+static const uint8_t ACN_ID[12] = {
+  0x41,0x53,0x43,0x2d,0x45,0x31,0x2e,0x31,
+  0x37,0x00,0x00,0x00
 };
 
 struct SacnPacket {
-  bool    valid;
-  uint16_t universe;
-  uint8_t  priority;
-  uint16_t dmxLen;
-  uint8_t* dmxData; // Zeiger in den UDP-Puffer (inkl. Startcode)
+  bool      valid;
+  uint16_t  universe;
+  uint8_t   priority;
+  uint16_t  dmxLen;
+  uint8_t*  payload;   // Zeiger auf Startcode-Byte im UDP-Puffer
 };
 
 SacnPacket parseSacn(uint8_t* buf, int len) {
   SacnPacket pkt = {false, 0, 0, 0, nullptr};
   if (len < 126) return pkt;
 
-  // Preamble Size: Offset 0, Wert 0x0010
+  // Preamble Size @ 0: 0x00 0x10
   if (buf[0] != 0x00 || buf[1] != 0x10) return pkt;
 
-  // ACN Identifier: Offset 4..15
-  for (int i = 0; i < 12; i++) {
-    if (buf[4 + i] != ACN_ID[i]) return pkt;
-  }
+  // ACN Identifier @ 4
+  if (memcmp(buf + 4, ACN_ID, 12) != 0) return pkt;
 
-  // Vektoren prüfen (Root = 0x00000004, Framing = 0x00000002, DMP = 0x02)
-  uint32_t rootVector = ((uint32_t)buf[18] << 24) | ((uint32_t)buf[19] << 16) |
-                        ((uint32_t)buf[20] << 8)  | buf[21];
-  if (rootVector != 0x00000004) return pkt;
+  // Root Vector @ 18: 0x00000004
+  uint32_t rv = ((uint32_t)buf[18] << 24) | ((uint32_t)buf[19] << 16)
+              | ((uint32_t)buf[20] <<  8) |  buf[21];
+  if (rv != 0x00000004ul) return pkt;
 
-  uint32_t framingVector = ((uint32_t)buf[40] << 24) | ((uint32_t)buf[41] << 16) |
-                           ((uint32_t)buf[42] << 8)  | buf[43];
-  if (framingVector != 0x00000002) return pkt;
+  // Framing Vector @ 40: 0x00000002
+  uint32_t fv = ((uint32_t)buf[40] << 24) | ((uint32_t)buf[41] << 16)
+              | ((uint32_t)buf[42] <<  8) |  buf[43];
+  if (fv != 0x00000002ul) return pkt;
 
-  if (buf[117] != 0x02) return pkt; // DMP Vector
+  // DMP Vector @ 117: 0x02
+  if (buf[117] != 0x02) return pkt;
 
   pkt.valid    = true;
   pkt.universe = ((uint16_t)buf[113] << 8) | buf[114];
   pkt.priority = buf[108];
-  pkt.dmxLen   = (((uint16_t)(buf[123] & 0x0F) << 8) | buf[124]) - 1;
-  pkt.dmxData  = buf + 126; // Startcode + 512 Byte DMX
+  // Property count @ 123-124, minus Startcode-Byte
+  pkt.dmxLen   = (uint16_t)(((buf[123] & 0x0F) << 8) | buf[124]) - 1u;
+  pkt.payload  = buf + 125;   // Startcode @ 125, DMX-Daten ab 126
 
   return pkt;
 }
 
-// ──────────────────────────────────────────
-//  DMX AUSGABE
-// ──────────────────────────────────────────
-
-void sendDmx(HardwareSerial& serial, int deRePin, uint8_t* data, uint16_t len) {
-  // DMX Break: Leitung auf LOW ziehen (über serielle Stop-Bits simuliert)
-  // Zuverlässigster Weg auf ESP32: baudrate wechseln für Break
-  serial.end();
-  pinMode(DMX1_TX == deRePin - 1 ? DMX1_TX :
-          DMX2_TX == deRePin - 1 ? DMX2_TX : DMX3_TX, OUTPUT);
-  // DE/RE HIGH = Senden
-  digitalWrite(deRePin, HIGH);
-
-  // BREAK
-  int txPin = (deRePin == DMX1_DE_RE) ? DMX1_TX :
-              (deRePin == DMX2_DE_RE) ? DMX2_TX : DMX3_TX;
-  digitalWrite(txPin, LOW);
-  delayMicroseconds(DMX_BREAK_US);
-  // MAB
-  digitalWrite(txPin, HIGH);
-  delayMicroseconds(DMX_MAB_US);
-
-  // DMX mit 250 kBaud senden
-  if (deRePin == DMX1_DE_RE)
-    serial.begin(250000, SERIAL_8N2, -1, DMX1_TX);
-  else if (deRePin == DMX2_DE_RE)
-    serial.begin(250000, SERIAL_8N2, -1, DMX2_TX);
-  else
-    serial.begin(250000, SERIAL_8N2, -1, DMX3_TX);
-
-  // Startcode + Daten
-  serial.write((uint8_t)0x00); // Startcode
-  serial.write(data + 1, min((int)len, DMX_CHANNELS));
-  serial.flush();
-
-  // DE/RE LOW = Empfang (nicht nötig, aber sauber)
-  // digitalWrite(deRePin, LOW);
-}
-
-// Wrapper für jeden Port
-void sendDmxPort1() {
-  sendDmx(dmxSerial1, DMX1_DE_RE, dmxData[0], DMX_CHANNELS);
-}
-void sendDmxPort2() {
-  sendDmx(dmxSerial2, DMX2_DE_RE, dmxData[1], DMX_CHANNELS);
-}
-void sendDmxPort3() {
-  sendDmx(dmxSerial3, DMX3_DE_RE, dmxData[2], DMX_CHANNELS);
-}
-
-// ──────────────────────────────────────────
-//  OLED ANZEIGE
-// ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────
+//  OLED
+// ─────────────────────────────────────────────────────
 
 void updateOled() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
 
-  // Zeile 1: IP-Adresse
+  // Zeile 0 (y=0): IP
   display.setCursor(0, 0);
-  display.print("IP:");
+  display.print("IP: ");
   display.print(localIP);
 
-  // Zeile 2: sACN-Status je Universum
-  display.setCursor(0, 12);
-  display.print("U");
-  display.print(UNIVERSE_1);
-  display.print(":");
-  display.print(sacnActive[0] ? "OK" : "--");
+  // Zeile 1 (y=11): Universum-Status
+  display.setCursor(0, 11);
+  for (int i = 0; i < 3; i++) {
+    display.print("U");
+    display.print(i + 1);
+    display.print(":");
+    display.print(sacnActive[i] ? "OK" : "--");
+    if (i < 2) display.print(" ");
+  }
 
-  display.print("  U");
-  display.print(UNIVERSE_2);
-  display.print(":");
-  display.print(sacnActive[1] ? "OK" : "--");
-
-  display.print("  U");
-  display.print(UNIVERSE_3);
-  display.print(":");
-  display.print(sacnActive[2] ? "OK" : "--");
-
-  // Zeile 3: ETH-Status
-  display.setCursor(0, 24);
-  display.print(ethConnected ? "ETH: verbunden" : "ETH: getrennt");
+  // Zeile 2 (y=22): ETH
+  display.setCursor(0, 22);
+  display.print(ethConnected ? "ETH: verbunden" : "ETH: getrennt ");
 
   display.display();
 }
 
-// ──────────────────────────────────────────
-//  MULTICAST BEITRITT
-// ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────
+//  MULTICAST
+// ─────────────────────────────────────────────────────
 
-IPAddress sacnMulticast(uint16_t universe) {
-  // sACN Multicast: 239.255.x.x (x = Universe high/low byte)
-  return IPAddress(239, 255, (universe >> 8) & 0xFF, universe & 0xFF);
+IPAddress sacnGroup(uint16_t uni) {
+  return IPAddress(239, 255, (uni >> 8) & 0xFF, uni & 0xFF);
 }
 
 void joinMulticast() {
-  IPAddress mc1 = sacnMulticast(UNIVERSE_1);
-  IPAddress mc2 = sacnMulticast(UNIVERSE_2);
-  IPAddress mc3 = sacnMulticast(UNIVERSE_3);
+  // Erste Gruppe über WiFiUDP
+  udp.beginMulticast(sacnGroup(UNIVERSE_1), SACN_PORT);
 
-  ip_addr_t addr1, addr2, addr3;
-  addr1.addr = mc1;
-  addr2.addr = mc2;
-  addr3.addr = mc3;
+  // Weitere Gruppen direkt über LwIP IGMP
+  struct netif* iface = netif_default;
+  if (!iface) return;
 
-  udp.beginMulticast(mc1, SACN_PORT);
-  // Weitere Gruppen über LwIP direkt beitreten
-  // (WiFiUDP unterstützt nur eine Gruppe – raw LwIP für die anderen)
-  struct netif* netif = netif_default;
-  if (netif) {
-    igmp_joingroup_netif(netif, (ip4_addr_t*)&addr2.addr);
-    igmp_joingroup_netif(netif, (ip4_addr_t*)&addr3.addr);
-  }
+  ip4_addr_t g2, g3;
+  IPAddress m2 = sacnGroup(UNIVERSE_2);
+  IPAddress m3 = sacnGroup(UNIVERSE_3);
+  IP4_ADDR(&g2, m2[0], m2[1], m2[2], m2[3]);
+  IP4_ADDR(&g3, m3[0], m3[1], m3[2], m3[3]);
+  igmp_joingroup_netif(iface, &g2);
+  igmp_joingroup_netif(iface, &g3);
 }
 
-// ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────
 //  ETHERNET-EREIGNISSE
-// ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────
 
 void onEthEvent(arduino_event_id_t event) {
   switch (event) {
@@ -281,59 +277,68 @@ void onEthEvent(arduino_event_id_t event) {
   }
 }
 
-// ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────
 //  SETUP
-// ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────
 
 void setup() {
-  // Serielle Debug-Ausgabe (nur wenn DMX3 nicht UART0 nutzt – hier via UART0 TX=GPIO5)
-  // GPIO5 ist TX3, daher kein normaler Serial.begin() für Debug!
-  // Optional: Serial.begin(115200) NUR für Tests ohne MAX485 #3.
+  // Debug-Serial auf UART0-Default-Pins (GPIO1 TX, GPIO3 RX)
+  // UART0 für DMX3 wird auf GPIO33 remappt – kein Konflikt.
+  Serial.begin(115200);
+  Serial.println("sACN→DMX booting...");
 
-  // DE/RE Pins als Ausgang, initial LOW (Empfangsmodus)
+  // DE/RE initial LOW (Empfangsmodus, Ausgänge still)
   pinMode(DMX1_DE_RE, OUTPUT); digitalWrite(DMX1_DE_RE, LOW);
   pinMode(DMX2_DE_RE, OUTPUT); digitalWrite(DMX2_DE_RE, LOW);
   pinMode(DMX3_DE_RE, OUTPUT); digitalWrite(DMX3_DE_RE, LOW);
 
-  // DMX-Daten mit 0 initialisieren
+  // DMX-Puffer auf 0 (Blackout)
   memset(dmxData, 0, sizeof(dmxData));
 
-  // OLED initialisieren
-  Wire.begin(OLED_SDA, OLED_SCL);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    // OLED nicht gefunden – weiter ohne Display
-  }
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.print("sACN -> DMX");
-  display.setCursor(0, 12);
-  display.print("Warte auf ETH...");
-  display.display();
+  // UART2 → DMX Port 1 (TX GPIO14, RX Dummy GPIO36)
+  dmxSerial1.begin(DMX_BAUD, SERIAL_8N2, DMX_RX_DUMMY, DMX1_TX);
 
-  // Ethernet starten
+  // UART1 → DMX Port 2 (TX GPIO12, RX Dummy GPIO36)
+  dmxSerial2.begin(DMX_BAUD, SERIAL_8N2, DMX_RX_DUMMY, DMX2_TX);
+
+  // UART0 → DMX Port 3 (TX GPIO33 remappt, RX Dummy GPIO36)
+  // UART0 default-Pins werden durch begin() mit expliziten Pins überschrieben.
+  dmxSerial3.begin(DMX_BAUD, SERIAL_8N2, DMX_RX_DUMMY, DMX3_TX);
+
+  // OLED
+  Wire.begin(OLED_SDA, OLED_SCL);
+  if (display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR)) {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);  display.print("sACN -> DMX");
+    display.setCursor(0, 11); display.print("3x Universum");
+    display.setCursor(0, 22); display.print("Warte auf ETH...");
+    display.display();
+  }
+
+  // Ethernet
   Network.onEvent(onEthEvent);
   ETH.begin();
 }
 
-// ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────
 //  LOOP
-// ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────
 
-static uint8_t udpBuf[638]; // max. sACN-Paketgröße
+static uint8_t       udpBuf[638];
 static unsigned long lastOledUpdate = 0;
 static unsigned long lastDmxSend    = 0;
 
 void loop() {
   unsigned long now = millis();
 
-  // UDP-Pakete empfangen
+  // ── UDP empfangen ──────────────────────────────────
   int pktLen = udp.parsePacket();
   if (pktLen > 0) {
-    int read = udp.read(udpBuf, sizeof(udpBuf));
-    if (read > 0) {
-      SacnPacket pkt = parseSacn(udpBuf, read);
+    int n = udp.read(udpBuf, sizeof(udpBuf));
+    if (n > 0) {
+      SacnPacket pkt = parseSacn(udpBuf, n);
       if (pkt.valid) {
         int uIdx = -1;
         if      (pkt.universe == UNIVERSE_1) uIdx = 0;
@@ -341,34 +346,37 @@ void loop() {
         else if (pkt.universe == UNIVERSE_3) uIdx = 2;
 
         if (uIdx >= 0 && pkt.dmxLen > 0) {
-          // Startcode + Daten übernehmen
-          memcpy(dmxData[uIdx] + 1, pkt.dmxData + 1,
-                 min((int)pkt.dmxLen, DMX_CHANNELS));
-          dmxData[uIdx][0] = 0x00; // DMX Startcode
-          lastPacket[uIdx]  = now;
-          sacnActive[uIdx]  = true;
+          dmxData[uIdx][0] = 0x00;  // DMX Startcode
+          uint16_t copyLen = min((int)pkt.dmxLen, DMX_CHANNELS);
+          memcpy(dmxData[uIdx] + 1, pkt.payload + 1, copyLen);
+          // Rest auf 0, falls Paket kürzer als 512
+          if (copyLen < DMX_CHANNELS)
+            memset(dmxData[uIdx] + 1 + copyLen, 0, DMX_CHANNELS - copyLen);
+          lastPacket[uIdx] = now;
+          sacnActive[uIdx] = true;
         }
       }
     }
   }
 
-  // Timeout prüfen
+  // ── Timeout-Check ──────────────────────────────────
   for (int i = 0; i < 3; i++) {
     if (sacnActive[i] && (now - lastPacket[i] > SACN_TIMEOUT_MS)) {
       sacnActive[i] = false;
       memset(dmxData[i], 0, sizeof(dmxData[i]));
+      Serial.printf("Universum %d: Signal verloren\n", i + 1);
     }
   }
 
-  // DMX senden (ca. 44 Hz – alle ~23 ms)
+  // ── DMX senden (~44 Hz) ────────────────────────────
   if (now - lastDmxSend >= 23) {
     lastDmxSend = now;
-    sendDmxPort1();
-    sendDmxPort2();
-    sendDmxPort3();
+    sendDmxFrame(dmxSerial1, DMX1_TX, DMX1_DE_RE, dmxData[0]);
+    sendDmxFrame(dmxSerial2, DMX2_TX, DMX2_DE_RE, dmxData[1]);
+    sendDmxFrame(dmxSerial3, DMX3_TX, DMX3_DE_RE, dmxData[2]);
   }
 
-  // OLED aktualisieren (1× pro Sekunde)
+  // ── OLED-Update (1 Hz) ─────────────────────────────
   if (now - lastOledUpdate >= 1000) {
     lastOledUpdate = now;
     updateOled();
