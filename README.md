@@ -33,8 +33,8 @@ Since creating the original design, a lot of the core functionality has changed.
 
 Other required parts:
 
-- Screws for the lid
-- Screws for mounting the WT32-ETH01
+- Screws for the lid (I used 2.5x16 but any simmilar will do)
+- Screws for mounting the WT32-ETH01 (I used 2.5x10)
 - Cable (I used DMX cable from Thomann: https://www.thomann.de/de/cordial_csp_1.htm)
 
 ## Required Tools
